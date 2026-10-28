@@ -16,38 +16,10 @@ const countEl = document.getElementById('count');
 const levelEl = document.getElementById('level');
 const tbIcons = document.querySelector('#taskbar .tb-icons');
 
-// ===== Fake "lockdown" screen =====
+//  Fake "lockdown" screen 
 const LOCKDOWN_CHANCE = 0.05;   // 5% chance each time a popup spawns
 const LOCKDOWN_MS = 8000;       // how long it stays up (set to 0 to keep it until "end the joke")
 let lockdownEl = null;
-
-// Styles live here so style.css stays untouched
-const lockStyle = document.createElement('style');
-lockStyle.textContent = `
-  #lockdown {
-    position: fixed; inset: 0; z-index: 9000;
-    display: flex; align-items: center; justify-content: center;
-    padding: 20px; text-align: center; color: #fff;
-    animation: lock-flash 0.4s steps(1) infinite; /* 2.5 flashes/sec, kept under the 3/sec safety limit */
-  }
-  @keyframes lock-flash { 0% { background: #c00014; } 50% { background: #1a0003; } }
-  #lockdown .lock-box {
-    max-width: 580px; padding: 26px 30px;
-    background: rgba(0, 0, 0, 0.85); border: 2px solid #fff; border-radius: 8px;
-  }
-  #lockdown h1 { font-size: 28px; margin-bottom: 12px; color: #ff4d5e; letter-spacing: 1px; }
-  #lockdown p { font-size: 15px; line-height: 1.5; margin-bottom: 12px; }
-  #lockdown code {
-    display: block; padding: 10px; margin-bottom: 12px;
-    background: #111; border: 1px dashed #ff4d5e; border-radius: 4px;
-    font-family: Consolas, "Courier New", monospace; font-size: 14px; word-break: break-all;
-  }
-  #lockdown .lock-small { font-size: 11px; opacity: 0.7; margin-bottom: 0; }
-  @media (prefers-reduced-motion: reduce) {
-    #lockdown { animation: none; background: #c00014; }
-  }
-`;
-document.head.appendChild(lockStyle);
 
 // Random, obviously-not-real bitcoin-style address (random characters, no valid checksum)
 const BECH32 = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
@@ -79,6 +51,60 @@ function hideLockdown() {
   if (lockdownEl) { lockdownEl.remove(); lockdownEl = null; }
 }
 
+//  Error sound 
+// Leave null to use the built-in synthesized error "ding-dong".
+// Or point it at your own file, e.g. 'error.wav' placed next to this script.
+const ERROR_SOUND_FILE = null;
+const SOUND_GAP_MS = 80;        // min gap between sounds so a burst of popups isn't deafening
+let audioCtx = null;
+let lastSoundAt = 0;
+
+function getAudioCtx() {
+  if (!audioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) audioCtx = new AC();
+  }
+  return audioCtx;
+}
+
+// Browsers block audio until the user interacts with the page, so unlock it on the first click/key
+function unlockAudio() {
+  const ctx = getAudioCtx();
+  if (ctx && ctx.state === 'suspended') ctx.resume();
+}
+document.addEventListener('click', unlockAudio);
+document.addEventListener('keydown', unlockAudio);
+
+function playErrorSound() {
+  const now = performance.now();
+  if (now - lastSoundAt < SOUND_GAP_MS) return;
+  lastSoundAt = now;
+
+  if (ERROR_SOUND_FILE) {
+    const a = new Audio(ERROR_SOUND_FILE);
+    a.volume = 0.5;
+    a.play().catch(() => {}); // ignored if the browser still has audio blocked
+    return;
+  }
+
+  const ctx = getAudioCtx();
+  if (!ctx || ctx.state !== 'running') return;
+  const t = ctx.currentTime;
+  // Two quick descending tones
+  [[660, 0], [440, 0.12]].forEach(([freq, delay]) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t + delay);
+    gain.gain.exponentialRampToValueAtTime(0.18, t + delay + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + delay + 0.22);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t + delay);
+    osc.stop(t + delay + 0.25);
+  });
+}
+
 function updateHud() {
   countEl.textContent = popups;
   levelEl.textContent = Math.min(99, popups) + "%";
@@ -87,6 +113,7 @@ function updateHud() {
 function spawnPopup() {
   if (popups >= MAX) return;
   if (Math.random() < LOCKDOWN_CHANCE) showLockdown();
+  playErrorSound();
   const w = warnings[Math.floor(Math.random() * warnings.length)];
   const el = document.createElement('div');
   el.className = 'popup';
